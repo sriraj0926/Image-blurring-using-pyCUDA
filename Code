@@ -1,0 +1,80 @@
+!pip install pycuda opencv-python
+!pip install pycuda
+!pip install opencv-python-headless
+
+import pycuda.driver as cuda
+import numpy as np
+import cv2
+import time  # Import time library for timing
+import pycuda.autoinit
+import pycuda.driver as cuda
+from pycuda.compiler import SourceModule
+
+from google.colab.patches import cv2_imshow
+
+# CUDA kernel for box blur
+kernel_code_blur = """
+__global__ void box_blur(unsigned char* input, unsigned char* output, int width, int height, int radius) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (x < width && y < height) {
+        float sum = 0;
+        int count = 0;
+        for (int dy = -radius; dy <= radius; dy++) {
+            for (int dx = -radius; dx <= radius; dx++) {
+                int nx = x + dx;
+                int ny = y + dy;
+                if (nx >= 0 && ny >= 0 && nx < width && ny < height) {
+                    sum += input[ny * width + nx];
+                    count++;
+                }
+            }
+        }
+        output[y * width + x] = sum / count;
+    }
+}
+"""
+
+image = cv2.imread("test3.jpg", cv2.IMREAD_GRAYSCALE)
+height, width = image.shape
+image_size = image.size
+
+d_input = cuda.mem_alloc(image_size)
+d_output = cuda.mem_alloc(image_size)
+
+cuda.memcpy_htod(d_input, image)
+
+mod_blur = SourceModule(kernel_code_blur)
+
+box_blur_kernel = mod_blur.get_function("box_blur")
+
+block_size = (16, 16, 1)
+grid_size = ((width + block_size[0] - 1) // block_size[0], (height + block_size[1] - 1) // block_size[1])
+
+radius = np.int32(3)
+
+start_time = time.time()
+
+box_blur_kernel(d_input, d_output, np.int32(width), np.int32(height), radius, block=block_size, grid=grid_size)
+
+end_time = time.time()
+
+output = np.empty_like(image)
+cuda.memcpy_dtoh(output, d_output)
+
+cv2_imshow(image)
+cv2_imshow(output)
+
+# Print number of blocks
+print(f"Number of Blocks: {grid_size[0]} x {grid_size[1]} = {grid_size[0] * grid_size[1]}")
+
+# Calculate total number of threads
+total_threads = block_size[0] * block_size[1] * grid_size[0] * grid_size[1]
+
+print(f"Total number of threads: {total_threads}")
+
+print(f"Execution time: {end_time - start_time:.4f} seconds")
+
+cv2.waitKey(0)
+cv2.destroyAllWindows()
